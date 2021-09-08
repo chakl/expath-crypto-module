@@ -61,6 +61,7 @@ public class ExistExpathCryptoModule extends AbstractInternalModule {
 			functionDefs(HmacFunction.class, HmacFunction.FS_HMAC),
 			functionDefs(GenerateSignatureFunction.class, GenerateSignatureFunction.FS_GENERATE_SIGNATURE),
 			functionDefs(ValidateSignatureFunction.class, ValidateSignatureFunction.FS_VALIDATE_SIGNATURE),
+			functionDefs(ValidateSignatureFunction.class, ValidateSignatureFunction.FS_VALIDATE_SIGNATURE_BY_CERTFILE),
 			functionDefs(EncryptionFunctions.class, EncryptionFunctions.FS_ENCRYPT, EncryptionFunctions.FS_DECRYPT));
 
 	public ExistExpathCryptoModule(final Map<String, List<? extends Object>> parameters) throws Exception {

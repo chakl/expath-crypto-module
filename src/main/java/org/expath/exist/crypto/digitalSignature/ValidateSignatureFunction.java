@@ -19,12 +19,18 @@
  */
 package org.expath.exist.crypto.digitalSignature;
 
-import java.io.IOException;
-import java.io.Reader;
-import java.io.StringReader;
+import java.io.*;
+import java.security.PublicKey;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateFactory;
+import java.util.Iterator;
 import java.util.Properties;
 
+import javax.xml.crypto.dsig.Reference;
+import javax.xml.crypto.dsig.XMLSignature;
 import javax.xml.crypto.dsig.XMLSignatureException;
+import javax.xml.crypto.dsig.XMLSignatureFactory;
+import javax.xml.crypto.dsig.dom.DOMValidateContext;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
@@ -33,20 +39,16 @@ import javax.xml.transform.OutputKeys;
 import org.exist.storage.serializers.Serializer;
 import org.exist.xquery.BasicFunction;
 import org.exist.xquery.FunctionSignature;
-import org.exist.xquery.XPathException;
 import org.exist.xquery.XQueryContext;
-import org.exist.xquery.value.BooleanValue;
-import org.exist.xquery.value.NodeValue;
-import org.exist.xquery.value.Sequence;
-import org.exist.xquery.value.Type;
+import org.exist.xquery.value.*;
 import org.expath.exist.crypto.EXpathCryptoException;
+import org.expath.exist.crypto.ExistExpathCryptoModule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.w3c.dom.Document;
+import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
-import org.xml.sax.SAXNotRecognizedException;
-import org.xml.sax.SAXNotSupportedException;
 
 import ro.kuberam.libs.java.crypto.CryptoException;
 import ro.kuberam.libs.java.crypto.digitalSignature.ValidateXmlSignature;
@@ -64,10 +66,19 @@ public class ValidateSignatureFunction extends BasicFunction {
 
 	private static final Logger LOG = LoggerFactory.getLogger(ValidateSignatureFunction.class);
 
-	public final static FunctionSignature FS_VALIDATE_SIGNATURE = functionSignature("validate-signature",
+	private static final String FS_VALIDATE_SIGNATURE_NAME = "validate-signature";
+	private static final String FS_VALIDATE_SIGNATURE_BY_CERTFILE_NAME = "validate-signature-by-certfile";
+
+	public final static FunctionSignature FS_VALIDATE_SIGNATURE = functionSignature(FS_VALIDATE_SIGNATURE_NAME,
 			"This function validates an XML Digital Signature.",
 			returns(Type.BOOLEAN, "boolean value true() if the signature is valid, otherwise return value false()."),
 			param("data", Type.NODE, "The enveloped, enveloping, or detached signature."));
+
+	public final static FunctionSignature FS_VALIDATE_SIGNATURE_BY_CERTFILE = functionSignature(FS_VALIDATE_SIGNATURE_BY_CERTFILE_NAME,
+			"This function validates an XML Digital Signature using the public key from a PEM encoded X.509 certificate file.",
+			returns(Type.BOOLEAN, "boolean value true() if the signature is valid, otherwise return value false()."),
+			param("data", Type.NODE, "The enveloped, enveloping, or detached signature."),
+			param("certfile",  Type.STRING,"The name of a PEM encoded X.509 certificate to read the validation key from."));
 
 	public ValidateSignatureFunction(final XQueryContext context, final FunctionSignature signature) {
 		super(context, signature);
@@ -81,50 +92,140 @@ public class ValidateSignatureFunction extends BasicFunction {
 	}
 
 	@Override
-	public Sequence eval(final Sequence[] args, final Sequence contextSequence) throws XPathException {
+	public Sequence eval(final Sequence[] args, final Sequence contextSequence) throws EXpathCryptoException {
 		if (args[0].isEmpty()) {
 			return Sequence.EMPTY_SEQUENCE;
 		}
 
+		Document inputDOMDoc = null;
+		try {
+			inputDOMDoc = getInputDOMDoc(args[0].itemAt(0));
+		} catch (SAXException | ParserConfigurationException | IOException e) {
+			LOG.error(e.getMessage(), e);
+			return Sequence.EMPTY_SEQUENCE;
+		}
+
+		Boolean isValid = false;
+		switch (getName().getLocalPart()) {
+			case FS_VALIDATE_SIGNATURE_NAME:
+				try {
+					isValid = ValidateXmlSignature.validate(inputDOMDoc);
+				} catch (CryptoException | IOException | XMLSignatureException e) {
+					throw new EXpathCryptoException(this, e);
+				}
+				return new BooleanValue(isValid);
+
+			case FS_VALIDATE_SIGNATURE_BY_CERTFILE_NAME:
+				if (args[1].isEmpty()) {
+					LOG.error("Missing certfile name");
+					return Sequence.EMPTY_SEQUENCE;
+				}
+
+				PublicKey pk = null;
+				try {
+					FileInputStream fis = new FileInputStream(String.valueOf(args[1]));
+					BufferedInputStream bis = new BufferedInputStream(fis);
+					CertificateFactory cf = CertificateFactory.getInstance("X.509");
+					Certificate cert = null;
+					while (bis.available() > 0) {
+						cert = cf.generateCertificate(bis);
+						System.out.println(cert.toString());
+					}
+					pk = cert.getPublicKey();
+					System.out.println(pk.toString());
+
+					isValid = ValidateXmlSignatureByPublicKey(inputDOMDoc, pk);
+				} catch (Exception ex) {
+					throw new EXpathCryptoException(this, ex);
+				}
+
+				return new BooleanValue(isValid);
+
+			default:
+				throw new EXpathCryptoException(this, ExistExpathCryptoModule.NO_FUNCTION,
+						"No function: " + getName() + "#" + getSignature().getArgumentCount());
+		}
+	}
+
+	private Document getInputDOMDoc(Item item) throws SAXException, ParserConfigurationException, IOException {
 		// get and process the input document or node to InputStream, in order to be
 		// transformed into DOM Document
 		final Serializer serializer = context.getBroker().getSerializer();
 		serializer.reset();
 
 		final Properties outputProperties = new Properties(defaultOutputKeysProperties);
-		try {
-			serializer.setProperties(outputProperties);
-		} catch (SAXNotRecognizedException | SAXNotSupportedException ex) {
-			LOG.error(ex.getMessage(), ex);
-		}
+		serializer.setProperties(outputProperties);
 
 		// initialize the document builder
 		final DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
 		dbf.setNamespaceAware(true);
 		DocumentBuilder db = null;
-		try {
-			db = dbf.newDocumentBuilder();
-		} catch (final ParserConfigurationException ex) {
-			LOG.error(ex.getMessage(), ex);
-		}
+		db = dbf.newDocumentBuilder();
 
 		// process the input string to DOM document
 		Document inputDOMDoc = null;
-		try (Reader reader = new StringReader(serializer.serialize((NodeValue) args[0].itemAt(0)))) {
-			inputDOMDoc = db.parse(new InputSource(reader));
-		} catch (SAXException | IOException ex) {
-			LOG.error(ex.getMessage(), ex);
-		}
+		Reader reader = new StringReader(serializer.serialize((NodeValue) item));
+		inputDOMDoc = db.parse(new InputSource(reader));
 
-		// validate the signature
-		Boolean isValid = false;
-		try {
-			isValid = ValidateXmlSignature.validate(inputDOMDoc);
-			// isValid = ValidateXmlSignature.validate((Document)args[0].itemAt(0));
-		} catch (CryptoException | IOException | XMLSignatureException e) {
-			throw new EXpathCryptoException(this, e);
-		}
+		return inputDOMDoc;
+	}
 
-		return new BooleanValue(isValid);
+	private Boolean ValidateXmlSignatureByPublicKey(Document inputDOMDoc, PublicKey pk) throws Exception {
+		boolean coreValidity = false;
+
+		// Find Signature element.
+		NodeList nl = inputDOMDoc.getElementsByTagNameNS(XMLSignature.XMLNS, "Signature");
+		if (nl.getLength() == 0) {
+			throw new Exception("Cannot find Signature element");
+		}
+		XMLSignatureFactory fac = XMLSignatureFactory.getInstance("DOM");
+		// Create a DOMValidateContext, specify public key and document context.
+		DOMValidateContext valContext = new DOMValidateContext(pk, nl.item(0));
+		// register ID element (handle stricter @ID attribute requirements in JRE8)
+		valContext.setIdAttributeNS(inputDOMDoc.getDocumentElement(), null, "ID");
+		// only needed for debugging, disable for production
+		//valContext.setProperty("javax.xml.crypto.dsig.cacheReference", Boolean.TRUE);
+
+		// Unmarshal the XMLSignature.
+		XMLSignature signature = fac.unmarshalXMLSignature(valContext);
+
+		// Validate the XMLSignature.
+		coreValidity = signature.validate(valContext);
+		System.out.println("signature.validate is : " + coreValidity);
+
+		// dump signed data for debugging
+		Iterator iterator = signature.getSignedInfo().getReferences().iterator();
+		System.out.println("---- START PRINTING SIGNED DATA DUMP ----");
+		while(iterator.hasNext()) {
+			InputStream is = ((Reference) iterator.next()).getDigestInputStream();
+			// Display the data.
+			ByteArrayOutputStream result = new ByteArrayOutputStream();
+			byte[] buffer = new byte[1024];
+			int length;
+			while (is != null && (length = is.read(buffer)) != -1 ) {
+				result.write(buffer, 0, length);
+			}
+			System.out.println(result.toString("UTF-8"));
+			System.out.println("----");
+		}
+		System.out.println("---- STOP PRINTING SIGNED DATA DUMP ----");
+
+		// Check core validation status.
+		if (coreValidity == false) {
+			System.err.println("Signature failed core validation");
+			boolean sv = signature.getSignatureValue().validate(valContext);
+			System.out.println("signature validation status: " + sv);
+			if (sv == false) {
+				// Check the validation status of each Reference.
+				Iterator i = signature.getSignedInfo().getReferences().iterator();
+				for (int j = 0; i.hasNext(); j++) {
+					boolean refValid = ((Reference) i.next()).validate(valContext);
+					System.out.println("ref[" + j + "] validity status: " + refValid);
+				}
+			}
+		} else {
+			System.out.println("Signature passed core validation");
+		}
+		return coreValidity;
 	}
 }
