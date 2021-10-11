@@ -129,10 +129,10 @@ public class ValidateSignatureFunction extends BasicFunction {
 					Certificate cert = null;
 					while (bis.available() > 0) {
 						cert = cf.generateCertificate(bis);
-						System.out.println(cert.toString());
+						//System.out.println(cert.toString());
 					}
 					pk = cert.getPublicKey();
-					System.out.println(pk.toString());
+					//System.out.println(pk.toString());
 
 					isValid = ValidateXmlSignatureByPublicKey(inputDOMDoc, pk);
 				} catch (Exception ex) {
@@ -151,65 +151,43 @@ public class ValidateSignatureFunction extends BasicFunction {
 		// get and process the input document or node to InputStream, in order to be
 		// transformed into DOM Document
 		final Serializer serializer = context.getBroker().getSerializer();
-		serializer.reset();
-
 		final Properties outputProperties = new Properties(defaultOutputKeysProperties);
+		serializer.reset();
 		serializer.setProperties(outputProperties);
 
 		// initialize the document builder
 		final DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
 		dbf.setNamespaceAware(true);
-		DocumentBuilder db = null;
-		db = dbf.newDocumentBuilder();
+		final DocumentBuilder db = dbf.newDocumentBuilder();
 
 		// process the input string to DOM document
-		Document inputDOMDoc = null;
-		Reader reader = new StringReader(serializer.serialize((NodeValue) item));
-		inputDOMDoc = db.parse(new InputSource(reader));
-
-		return inputDOMDoc;
+		return db.parse(new InputSource(new StringReader(serializer.serialize((NodeValue) item))));
 	}
 
 	private Boolean ValidateXmlSignatureByPublicKey(Document inputDOMDoc, PublicKey pk) throws Exception {
 		boolean coreValidity = false;
 
 		// Find Signature element.
-		NodeList nl = inputDOMDoc.getElementsByTagNameNS(XMLSignature.XMLNS, "Signature");
+		final NodeList nl = inputDOMDoc.getElementsByTagNameNS(XMLSignature.XMLNS, "Signature");
 		if (nl.getLength() == 0) {
 			throw new Exception("Cannot find Signature element");
 		}
-		XMLSignatureFactory fac = XMLSignatureFactory.getInstance("DOM");
+		final XMLSignatureFactory fac = XMLSignatureFactory.getInstance("DOM");
 		// Create a DOMValidateContext, specify public key and document context.
 		DOMValidateContext valContext = new DOMValidateContext(pk, nl.item(0));
 		// register ID element (handle stricter @ID attribute requirements in JRE8)
 		valContext.setIdAttributeNS(inputDOMDoc.getDocumentElement(), null, "ID");
-		// only needed for debugging, disable for production
+		// only for debugging, disable for production
 		//valContext.setProperty("javax.xml.crypto.dsig.cacheReference", Boolean.TRUE);
 
 		// Unmarshal the XMLSignature.
-		XMLSignature signature = fac.unmarshalXMLSignature(valContext);
+		final XMLSignature signature = fac.unmarshalXMLSignature(valContext);
 
 		// Validate the XMLSignature.
 		coreValidity = signature.validate(valContext);
-		System.out.println("signature.validate is : " + coreValidity);
+		//System.out.println("signature.validate is : " + coreValidity);
 
-		// dump signed data for debugging
-		Iterator iterator = signature.getSignedInfo().getReferences().iterator();
-		System.out.println("---- START PRINTING SIGNED DATA DUMP ----");
-		while(iterator.hasNext()) {
-			InputStream is = ((Reference) iterator.next()).getDigestInputStream();
-			// Display the data.
-			ByteArrayOutputStream result = new ByteArrayOutputStream();
-			byte[] buffer = new byte[1024];
-			int length;
-			while (is != null && (length = is.read(buffer)) != -1 ) {
-				result.write(buffer, 0, length);
-			}
-			System.out.println(result.toString("UTF-8"));
-			System.out.println("----");
-		}
-		System.out.println("---- STOP PRINTING SIGNED DATA DUMP ----");
-
+/*
 		// Check core validation status.
 		if (coreValidity == false) {
 			System.err.println("Signature failed core validation");
@@ -226,6 +204,7 @@ public class ValidateSignatureFunction extends BasicFunction {
 		} else {
 			System.out.println("Signature passed core validation");
 		}
+*/
 		return coreValidity;
 	}
 }
